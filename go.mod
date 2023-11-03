@@ -26,3 +26,6 @@ require (
 	google.golang.org/grpc v1.33.1
 	google.golang.org/protobuf v1.25.0
 )
+
+replace github.com/brocaar/chirpstack-api/go/v3 => ../chirpstack-api/go
+replace "github.com/brocaar/chirpstack-fuota-server/internal/multicast" => ./multicast

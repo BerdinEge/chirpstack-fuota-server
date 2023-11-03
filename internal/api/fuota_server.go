@@ -10,6 +10,7 @@ import (
 	"github.com/brocaar/chirpstack-api/go/v3/as/external/api"
 	fapi "github.com/brocaar/chirpstack-api/go/v3/fuota"
 	"github.com/brocaar/chirpstack-fuota-server/internal/fuota"
+	multicast "github.com/brocaar/chirpstack-fuota-server/internal/multicast"
 	"github.com/brocaar/chirpstack-fuota-server/internal/storage"
 	"github.com/brocaar/lorawan"
 )
@@ -81,6 +82,59 @@ func (a *FUOTAServerAPI) CreateDeployment(ctx context.Context, req *fapi.CreateD
 	}(depl)
 
 	return &fapi.CreateDeploymentResponse{
+		Id: depl.GetID().Bytes(),
+	}, nil
+}
+
+// CreateMulticastDeployment creates the given Multicast deployment.
+func (a *FUOTAServerAPI) CreateMulticastDeployment(ctx context.Context, req *fapi.CreateMulticastDeploymentRequest) (*fapi.CreateMulticastDeploymentResponse, error) {
+	opts := multicast.DeploymentOptions{
+		ApplicationID:      req.GetDeployment().ApplicationId,
+		Devices:            make(map[lorawan.EUI64]multicast.DeviceOptions),
+		MulticastDR:        uint8(req.GetDeployment().MulticastDr),
+		MulticastFrequency: req.GetDeployment().MulticastFrequency,
+		MulticastGroupID:   uint8(req.GetDeployment().MulticastGroupId),
+		MulticastTimeout:   uint8(req.GetDeployment().MulticastTimeout),
+	}
+
+	for _, d := range req.GetDeployment().Devices {
+		var devEUI lorawan.EUI64
+		var mcRootKey lorawan.AES128Key
+
+		copy(devEUI[:], d.DevEui)
+		copy(mcRootKey[:], d.McRootKey)
+
+		opts.Devices[devEUI] = multicast.DeviceOptions{
+			McRootKey: mcRootKey,
+		}
+	}
+
+	switch req.GetDeployment().MulticastGroupType {
+	case fapi.MulticastGroupType_CLASS_B:
+		opts.MulticastGroupType = api.MulticastGroupType_CLASS_B
+	case fapi.MulticastGroupType_CLASS_C:
+		opts.MulticastGroupType = api.MulticastGroupType_CLASS_C
+	}
+
+	unicastTimeout, err := ptypes.Duration(req.GetDeployment().UnicastTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	opts.UnicastTimeout = unicastTimeout
+
+	depl, err := multicast.NewDeployment(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	go func(depl *multicast.MulticastDeployment) {
+		if err := depl.Run(context.Background()); err != nil {
+			log.WithError(err).WithField("deployment_id", depl.GetID()).Error("api: multicast deployment error")
+		}
+	}(depl)
+
+	return &fapi.CreateMulticastDeploymentResponse{
 		Id: depl.GetID().Bytes(),
 	}, nil
 }
