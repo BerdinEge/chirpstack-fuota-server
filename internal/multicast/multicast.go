@@ -10,12 +10,15 @@ import (
 	"time"
 
 	"github.com/gofrs/uuid"
+	"github.com/golang/protobuf/ptypes"
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq/hstore"
 	log "github.com/sirupsen/logrus"
+	"google.golang.org/grpc"
 
 	"github.com/brocaar/chirpstack-api/go/v3/as/external/api"
 	"github.com/brocaar/chirpstack-api/go/v3/as/integration"
+	"github.com/brocaar/chirpstack-api/go/v3/fuota"
 	"github.com/brocaar/chirpstack-fuota-server/internal/client/as"
 	"github.com/brocaar/chirpstack-fuota-server/internal/eventhandler"
 	"github.com/brocaar/chirpstack-fuota-server/internal/storage"
@@ -197,6 +200,54 @@ func NewDeployment(opts DeploymentOptions) (*MulticastDeployment, error) {
 	}
 
 	return &d, nil
+}
+
+func BulkMulticastDeployment(genAppKey []byte, devEuiList [][]byte, groupId int64) int {
+
+	mcRootKey, err := multicastsetup.GetMcRootKeyForGenAppKey(lorawan.AES128Key{0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	dialOpts := []grpc.DialOption{
+		grpc.WithBlock(),
+		grpc.WithInsecure(),
+	}
+
+	conn, err := grpc.Dial("localhost:8070", dialOpts...)
+	if err != nil {
+		panic(err)
+	}
+
+	client := fuota.NewFUOTAServerServiceClient(conn)
+
+	resp, err := client.CreateMulticastDeployment(context.Background(), &fuota.CreateMulticastDeploymentRequest{
+		Deployment: &fuota.MulticastDeployment{
+			ApplicationId: 106,
+			Devices: []*fuota.DeploymentDevice{
+				{
+					DevEui:    []byte{9, 0, 0, 0, 0, 0, 0, 0},
+					McRootKey: mcRootKey[:],
+				},
+			},
+			MulticastDr:         5,
+			MulticastFrequency:  868100000,
+			MulticastGroupId:    0,
+			MulticastTimeout:    6,
+			UnicastTimeout:      ptypes.DurationProto(60 * time.Second),
+			UnicastAttemptCount: 1,
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	var id uuid.UUID
+	copy(id[:], resp.GetId())
+
+	fmt.Printf("deployment created: %s\n", id)
+
+	return len(devEuiList)
 }
 
 // GetID returns the random assigned FUOTA deployment ID.

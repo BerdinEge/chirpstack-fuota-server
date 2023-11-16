@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 
 	"github.com/gofrs/uuid"
 	"github.com/golang/protobuf/ptypes"
@@ -136,6 +137,33 @@ func (a *FUOTAServerAPI) CreateMulticastDeployment(ctx context.Context, req *fap
 
 	return &fapi.CreateMulticastDeploymentResponse{
 		Id: depl.GetID().Bytes(),
+	}, nil
+}
+
+func (a *FUOTAServerAPI) BulkMulticastDeployment(ctx context.Context, req *fapi.BulkMulticastDeploymentRequest) (*fapi.BulkMulticastDeploymentResponse, error) {
+	var devEuiList [][]byte
+
+	var deployment = req.GetDeployment()
+
+	var genAppKey = deployment.McRootKey
+	var appId = deployment.ApplicationId
+
+	var deviceCount = len(deployment.GetDevices())
+	if deviceCount < 1 {
+		return nil, errors.New("empty device list")
+	}
+
+	for _, d := range req.GetDeployment().Devices {
+		var devEUI []byte
+		copy(devEUI[:], d.DevEui)
+
+		devEuiList = append(devEuiList, devEUI)
+	}
+
+	var nbOfDevices = multicast.BulkMulticastDeployment(genAppKey, devEuiList, appId)
+
+	return &fapi.BulkMulticastDeploymentResponse{
+		NumberOfDevices: uint32(nbOfDevices),
 	}, nil
 }
 

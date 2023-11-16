@@ -28,4 +28,4 @@ require (
 )
 
 replace github.com/brocaar/chirpstack-api/go/v3 => ../chirpstack-api/go
-replace "github.com/brocaar/chirpstack-fuota-server/internal/multicast" => ./multicast
+//replace "github.com/brocaar/chirpstack-fuota-server/internal/multicast" => ./multicast
