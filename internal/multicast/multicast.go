@@ -5,7 +5,9 @@ import (
 	"crypto/aes"
 	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/lib/pq/hstore"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/status"
 
 	"github.com/brocaar/chirpstack-api/go/v3/as/external/api"
 	"github.com/brocaar/chirpstack-api/go/v3/as/integration"
@@ -62,6 +65,12 @@ type MulticastDeployment struct {
 	// session end time
 	// this is set by the multicast-session setup function
 	sessionEndTime time.Time
+
+	// existing mc group id
+	existingMulticastGroupID string
+
+	// existing devices in the mc group
+	devicesAlreadyInTheMCGroup []lorawan.EUI64
 }
 
 // DeploymentOptions defines the options for a FUOTA Deployment.
@@ -125,6 +134,9 @@ type DeploymentOptions struct {
 
 	// Descriptor.
 	Descriptor [4]byte
+
+	// Existing mc group id
+	ExistingMulticastGroupID string
 }
 
 // DeviceOptions holds the device options.
@@ -168,7 +180,8 @@ func NewDeployment(opts DeploymentOptions) (*MulticastDeployment, error) {
 		opts:        opts,
 		deviceState: make(map[lorawan.EUI64]*deviceState),
 
-		multicastSetupDone: make(chan struct{}),
+		multicastSetupDone:       make(chan struct{}),
+		existingMulticastGroupID: opts.ExistingMulticastGroupID,
 		//fragmentationSessionSetupDone:  make(chan struct{}),
 		//multicastSessionSetupDone:      make(chan struct{}),
 		//fragmentationSessionStatusDone: make(chan struct{}),
@@ -202,11 +215,33 @@ func NewDeployment(opts DeploymentOptions) (*MulticastDeployment, error) {
 	return &d, nil
 }
 
-func BulkMulticastDeployment(genAppKey []byte, devEuiList [][]byte, groupId int64) int {
+func BulkMulticastDeployment(genAppKey string, devEuiList [][]byte, groupId int64, unicastTimeout int, unicastAttemptCount int, applicationId int, multicastFrequency int, multicastDR int, existingMCgroupID string) (int, string, error) {
 
-	mcRootKey, err := multicastsetup.GetMcRootKeyForGenAppKey(lorawan.AES128Key{0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+	// String'i hex byte dizisine dönüştürme
+	hexBytes, err := hex.DecodeString(genAppKey)
+	if err != nil {
+		fmt.Println("Convert error:", err)
+		return 0, "", nil
+	}
+
+	var aesKeyByteArray lorawan.AES128Key
+	copy(aesKeyByteArray[:], hexBytes)
+
+	mcRootKey, err := multicastsetup.GetMcRootKeyForGenAppKey(aesKeyByteArray)
 	if err != nil {
 		log.Fatal(err)
+		return 0, "", nil
+	}
+
+	var devicesToDeploy []*fuota.DeploymentDevice
+
+	for _, devEuiBytes := range devEuiList {
+		device := &fuota.DeploymentDevice{
+			DevEui:    devEuiBytes,
+			McRootKey: mcRootKey[:],
+		}
+
+		devicesToDeploy = append(devicesToDeploy, device)
 	}
 
 	dialOpts := []grpc.DialOption{
@@ -223,19 +258,15 @@ func BulkMulticastDeployment(genAppKey []byte, devEuiList [][]byte, groupId int6
 
 	resp, err := client.CreateMulticastDeployment(context.Background(), &fuota.CreateMulticastDeploymentRequest{
 		Deployment: &fuota.MulticastDeployment{
-			ApplicationId: 106,
-			Devices: []*fuota.DeploymentDevice{
-				{
-					DevEui:    []byte{9, 0, 0, 0, 0, 0, 0, 0},
-					McRootKey: mcRootKey[:],
-				},
-			},
-			MulticastDr:         5,
-			MulticastFrequency:  868100000,
-			MulticastGroupId:    0,
-			MulticastTimeout:    6,
-			UnicastTimeout:      ptypes.DurationProto(60 * time.Second),
-			UnicastAttemptCount: 1,
+			ApplicationId:            int64(applicationId),
+			Devices:                  devicesToDeploy,
+			MulticastDr:              uint32(multicastDR),
+			MulticastFrequency:       uint32(multicastFrequency),
+			MulticastGroupId:         uint32(groupId),
+			MulticastTimeout:         60,
+			UnicastTimeout:           ptypes.DurationProto(time.Duration(unicastTimeout) * time.Second),
+			UnicastAttemptCount:      uint32(unicastAttemptCount),
+			ExistingMulticastGroupId: existingMCgroupID,
 		},
 	})
 	if err != nil {
@@ -247,12 +278,17 @@ func BulkMulticastDeployment(genAppKey []byte, devEuiList [][]byte, groupId int6
 
 	fmt.Printf("deployment created: %s\n", id)
 
-	return len(devEuiList)
+	return len(devEuiList), resp.MulticastGroupId, nil
 }
 
 // GetID returns the random assigned FUOTA deployment ID.
 func (d *MulticastDeployment) GetID() uuid.UUID {
 	return d.id
+}
+
+// GetMulticastGroupID returns the ID of the created multicast group-if it exists.
+func (d *MulticastDeployment) GetMulticastGroupID() string {
+	return d.multicastGroupID
 }
 
 // Run starts the FUOTA update.
@@ -384,6 +420,12 @@ func (d *MulticastDeployment) handleMcGroupSetupAns(ctx context.Context, devEUI 
 func (d *MulticastDeployment) stepCreateMulticastGroup(ctx context.Context) error {
 	log.WithField("deployment_id", d.GetID()).Debug("fuota: stepCreateMulticastGroup funtion called")
 
+	if d.existingMulticastGroupID != "" && len(d.existingMulticastGroupID) > 0 {
+		log.WithField("deployment_id", d.GetID()).Debug("fuota: stepCreateMulticastGroup passed couse of an existing multicast group")
+		d.multicastGroupID = d.existingMulticastGroupID
+		return nil
+	}
+
 	// generate randomd devaddr
 	if _, err := rand.Read(d.mcAddr[:]); err != nil {
 		return fmt.Errorf("read random bytes error: %w", err)
@@ -446,13 +488,24 @@ func (d *MulticastDeployment) stepAddDevicesToMulticastGroup(ctx context.Context
 			"multicast_group_id": d.multicastGroupID,
 		}).Info("fuota: add device to multicast-group")
 
-		_, err := as.MulticastGroupClient().AddDevice(ctx, &api.AddDeviceToMulticastGroupRequest{
+		resp, err := as.MulticastGroupClient().AddDevice(ctx, &api.AddDeviceToMulticastGroupRequest{
 			MulticastGroupId: d.multicastGroupID,
 			DevEui:           devEUI.String(),
 		})
 		if err != nil {
-			return fmt.Errorf("add device to multicast-group error: %w", err)
+			var errCode = status.Code(err)
+			if errCode == 6 { //if it already exists in the mc group then add it to a list for avoid sending mcSetup command again.
+				d.devicesAlreadyInTheMCGroup = append(d.devicesAlreadyInTheMCGroup, devEUI)
+				continue
+			} else {
+				fmt.Errorf("add device to multicast-group error: %w", err)
+			}
+		} else if resp == nil {
+			return nil
 		}
+		//if err != nil {
+		//	return fmt.Errorf("add device to multicast-group error: %w", err)
+		//}
 	}
 
 	return nil
@@ -472,6 +525,9 @@ devLoop:
 		}
 
 		for devEUI := range d.opts.Devices {
+			if slices.Contains(d.devicesAlreadyInTheMCGroup, devEUI) {
+				continue
+			}
 			if d.deviceState[devEUI].getMulticastSetup() {
 				continue
 			}

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 
 	"github.com/gofrs/uuid"
@@ -90,12 +91,14 @@ func (a *FUOTAServerAPI) CreateDeployment(ctx context.Context, req *fapi.CreateD
 // CreateMulticastDeployment creates the given Multicast deployment.
 func (a *FUOTAServerAPI) CreateMulticastDeployment(ctx context.Context, req *fapi.CreateMulticastDeploymentRequest) (*fapi.CreateMulticastDeploymentResponse, error) {
 	opts := multicast.DeploymentOptions{
-		ApplicationID:      req.GetDeployment().ApplicationId,
-		Devices:            make(map[lorawan.EUI64]multicast.DeviceOptions),
-		MulticastDR:        uint8(req.GetDeployment().MulticastDr),
-		MulticastFrequency: req.GetDeployment().MulticastFrequency,
-		MulticastGroupID:   uint8(req.GetDeployment().MulticastGroupId),
-		MulticastTimeout:   uint8(req.GetDeployment().MulticastTimeout),
+		ApplicationID:            req.GetDeployment().ApplicationId,
+		Devices:                  make(map[lorawan.EUI64]multicast.DeviceOptions),
+		MulticastDR:              uint8(req.GetDeployment().MulticastDr),
+		MulticastFrequency:       req.GetDeployment().MulticastFrequency,
+		MulticastGroupID:         uint8(req.GetDeployment().MulticastGroupId),
+		MulticastTimeout:         uint8(req.GetDeployment().MulticastTimeout),
+		UnicastAttemptCount:      int(req.GetDeployment().UnicastAttemptCount),
+		ExistingMulticastGroupID: req.GetDeployment().ExistingMulticastGroupId,
 	}
 
 	for _, d := range req.GetDeployment().Devices {
@@ -110,12 +113,14 @@ func (a *FUOTAServerAPI) CreateMulticastDeployment(ctx context.Context, req *fap
 		}
 	}
 
-	switch req.GetDeployment().MulticastGroupType {
-	case fapi.MulticastGroupType_CLASS_B:
-		opts.MulticastGroupType = api.MulticastGroupType_CLASS_B
-	case fapi.MulticastGroupType_CLASS_C:
-		opts.MulticastGroupType = api.MulticastGroupType_CLASS_C
-	}
+	//switch when necessary, we just working with class c devices currently.
+	//switch req.GetDeployment().MulticastGroupType {
+	//case fapi.MulticastGroupType_CLASS_B:
+	//	opts.MulticastGroupType = api.MulticastGroupType_CLASS_B
+	//case fapi.MulticastGroupType_CLASS_C:
+	//	opts.MulticastGroupType = api.MulticastGroupType_CLASS_C
+	//}
+	opts.MulticastGroupType = api.MulticastGroupType_CLASS_C
 
 	unicastTimeout, err := ptypes.Duration(req.GetDeployment().UnicastTimeout)
 	if err != nil {
@@ -135,8 +140,21 @@ func (a *FUOTAServerAPI) CreateMulticastDeployment(ctx context.Context, req *fap
 		}
 	}(depl)
 
+	var waitFlag = 1
+
+	for waitFlag == 1 {
+		var mcGroupID = depl.GetMulticastGroupID()
+		if len(mcGroupID) > 0 && mcGroupID != "" {
+			waitFlag = 0
+			log.WithField("waitFlag", waitFlag).Debug("fuota: waitFlag value has changed to 0")
+		}
+	}
+
+	var mcGroupID = depl.GetMulticastGroupID()
+
 	return &fapi.CreateMulticastDeploymentResponse{
-		Id: depl.GetID().Bytes(),
+		Id:               depl.GetID().Bytes(),
+		MulticastGroupId: mcGroupID,
 	}, nil
 }
 
@@ -153,17 +171,27 @@ func (a *FUOTAServerAPI) BulkMulticastDeployment(ctx context.Context, req *fapi.
 		return nil, errors.New("empty device list")
 	}
 
-	for _, d := range req.GetDeployment().Devices {
+	var existingMCgroupID = deployment.GetExistingMulticastGroupId()
+
+	for _, d := range deployment.GetDevices() {
 		var devEUI []byte
-		copy(devEUI[:], d.DevEui)
+		devEUI, err := hex.DecodeString(d.DevEui)
+		if err != nil {
+			return nil, errors.New("devEUI parse error")
+		}
 
 		devEuiList = append(devEuiList, devEUI)
 	}
-
-	var nbOfDevices = multicast.BulkMulticastDeployment(genAppKey, devEuiList, appId)
+	log.Debug(devEuiList)
+	//, unicastTimeout int, unicastAttemptCount int, applicationId int, multicastFrequency int, multicastDR int
+	var nbOfDevices, createdMulticastGroupId, err = multicast.BulkMulticastDeployment(genAppKey, devEuiList, appId, int(deployment.GetUnicastTimeout()), int(deployment.GetUnicastAttemptCount()), int(deployment.GetApplicationId()), int(deployment.GetMulticastFrequency()), int(deployment.GetMulticastDr()), existingMCgroupID)
+	if err != nil {
+		return nil, err
+	}
 
 	return &fapi.BulkMulticastDeploymentResponse{
-		NumberOfDevices: uint32(nbOfDevices),
+		NumberOfDevices:  uint32(nbOfDevices),
+		MulticastGroupId: createdMulticastGroupId,
 	}, nil
 }
 
