@@ -99,6 +99,7 @@ func (a *FUOTAServerAPI) CreateMulticastDeployment(ctx context.Context, req *fap
 		MulticastTimeout:         uint8(req.GetDeployment().MulticastTimeout),
 		UnicastAttemptCount:      int(req.GetDeployment().UnicastAttemptCount),
 		ExistingMulticastGroupID: req.GetDeployment().ExistingMulticastGroupId,
+		ExistingDeploymentID:     req.GetDeployment().ExistingDeploymentId,
 	}
 
 	for _, d := range req.GetDeployment().Devices {
@@ -129,9 +130,19 @@ func (a *FUOTAServerAPI) CreateMulticastDeployment(ctx context.Context, req *fap
 
 	opts.UnicastTimeout = unicastTimeout
 
-	depl, err := multicast.NewDeployment(opts)
-	if err != nil {
-		return nil, err
+	var depl *multicast.MulticastDeployment
+	if len(req.GetDeployment().ExistingDeploymentId) != 0 && req.GetDeployment().ExistingDeploymentId != "" {
+		existingDeployment, err := multicast.GetExistingDeployment(req.GetDeployment().ExistingDeploymentId, opts)
+		if err != nil {
+			return nil, err
+		}
+		depl = existingDeployment
+	} else {
+		newDepl, err := multicast.NewDeployment(opts)
+		if err != nil {
+			return nil, err
+		}
+		depl = newDepl
 	}
 
 	go func(depl *multicast.MulticastDeployment) {
@@ -172,6 +183,7 @@ func (a *FUOTAServerAPI) BulkMulticastDeployment(ctx context.Context, req *fapi.
 	}
 
 	var existingMCgroupID = deployment.GetExistingMulticastGroupId()
+	var existingDeploymentID = deployment.GetExistingDeploymentId()
 
 	for _, d := range deployment.GetDevices() {
 		var devEUI []byte
@@ -184,7 +196,7 @@ func (a *FUOTAServerAPI) BulkMulticastDeployment(ctx context.Context, req *fapi.
 	}
 	log.Debug(devEuiList)
 	//, unicastTimeout int, unicastAttemptCount int, applicationId int, multicastFrequency int, multicastDR int
-	var nbOfDevices, createdMulticastGroupId, err = multicast.BulkMulticastDeployment(genAppKey, devEuiList, appId, int(deployment.GetUnicastTimeout()), int(deployment.GetUnicastAttemptCount()), int(deployment.GetApplicationId()), int(deployment.GetMulticastFrequency()), int(deployment.GetMulticastDr()), existingMCgroupID)
+	var nbOfDevices, createdMulticastGroupId, deploymentId, err = multicast.BulkMulticastDeployment(genAppKey, devEuiList, appId, int(deployment.GetUnicastTimeout()), int(deployment.GetUnicastAttemptCount()), int(deployment.GetApplicationId()), int(deployment.GetMulticastFrequency()), int(deployment.GetMulticastDr()), existingMCgroupID, existingDeploymentID)
 	if err != nil {
 		return nil, err
 	}
@@ -192,6 +204,7 @@ func (a *FUOTAServerAPI) BulkMulticastDeployment(ctx context.Context, req *fapi.
 	return &fapi.BulkMulticastDeploymentResponse{
 		NumberOfDevices:  uint32(nbOfDevices),
 		MulticastGroupId: createdMulticastGroupId,
+		DeploymentId:     deploymentId,
 	}, nil
 }
 

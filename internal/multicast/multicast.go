@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"slices"
 	"sync"
 	"time"
 
@@ -137,6 +136,9 @@ type DeploymentOptions struct {
 
 	// Existing mc group id
 	ExistingMulticastGroupID string
+
+	// Existing deployment id
+	ExistingDeploymentID string
 }
 
 // DeviceOptions holds the device options.
@@ -168,6 +170,36 @@ func (d *deviceState) setMulticastSetup(done bool) {
 	d.multicastSetup = done
 }
 
+func stringToUUID(inputString string) (uuid.UUID, error) {
+	// String'i UUID'ye çevir
+	uuidFromString, err := uuid.FromString(inputString)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	return uuidFromString, nil
+}
+
+func GetExistingDeployment(existingDeploymentID string, existingOpts DeploymentOptions) (*MulticastDeployment, error) {
+	// String'i UUID'ye çevir
+	existingDeploymentIDUUID, err := stringToUUID(existingDeploymentID)
+	if err != nil {
+		fmt.Println("UUID oluşturulamadı:", err)
+		return nil, err
+	}
+
+	d := MulticastDeployment{
+		id:          existingDeploymentIDUUID,
+		opts:        existingOpts,
+		deviceState: make(map[lorawan.EUI64]*deviceState),
+
+		multicastSetupDone:       make(chan struct{}),
+		existingMulticastGroupID: existingOpts.ExistingMulticastGroupID,
+	}
+
+	return &d, nil
+}
+
 // NewDeployment creates a new Deployment.
 func NewDeployment(opts DeploymentOptions) (*MulticastDeployment, error) {
 	id, err := uuid.NewV4()
@@ -182,9 +214,6 @@ func NewDeployment(opts DeploymentOptions) (*MulticastDeployment, error) {
 
 		multicastSetupDone:       make(chan struct{}),
 		existingMulticastGroupID: opts.ExistingMulticastGroupID,
-		//fragmentationSessionSetupDone:  make(chan struct{}),
-		//multicastSessionSetupDone:      make(chan struct{}),
-		//fragmentationSessionStatusDone: make(chan struct{}),
 	}
 
 	if err := storage.Transaction(func(tx sqlx.Ext) error {
@@ -195,17 +224,17 @@ func NewDeployment(opts DeploymentOptions) (*MulticastDeployment, error) {
 			return fmt.Errorf("create deployment error: %w", err)
 		}
 
-		for devEUI, _ := range opts.Devices {
-			d.deviceState[devEUI] = &deviceState{}
-
-			sdd := storage.DeploymentDevice{
-				DeploymentID: d.id,
-				DevEUI:       devEUI,
-			}
-			if err := storage.CreateDeploymentDevice(context.Background(), tx, &sdd); err != nil {
-				return fmt.Errorf("create deployment device error: %w", err)
-			}
-		}
+		//for devEUI, _ := range opts.Devices {
+		//	d.deviceState[devEUI] = &deviceState{}
+		//
+		//	sdd := storage.DeploymentDevice{
+		//		DeploymentID: d.id,
+		//		DevEUI:       devEUI,
+		//	}
+		//	if err := storage.CreateDeploymentDevice(context.Background(), tx, &sdd); err != nil {
+		//		return fmt.Errorf("create deployment device error: %w", err)
+		//	}
+		//}
 
 		return nil
 	}); err != nil {
@@ -215,13 +244,12 @@ func NewDeployment(opts DeploymentOptions) (*MulticastDeployment, error) {
 	return &d, nil
 }
 
-func BulkMulticastDeployment(genAppKey string, devEuiList [][]byte, groupId int64, unicastTimeout int, unicastAttemptCount int, applicationId int, multicastFrequency int, multicastDR int, existingMCgroupID string) (int, string, error) {
+func BulkMulticastDeployment(genAppKey string, devEuiList [][]byte, groupId int64, unicastTimeout int, unicastAttemptCount int, applicationId int, multicastFrequency int, multicastDR int, existingMCgroupID string, existingDeploymentID string) (int, string, string, error) {
 
-	// String'i hex byte dizisine dönüştürme
 	hexBytes, err := hex.DecodeString(genAppKey)
 	if err != nil {
 		fmt.Println("Convert error:", err)
-		return 0, "", nil
+		return 0, "", "", nil
 	}
 
 	var aesKeyByteArray lorawan.AES128Key
@@ -230,7 +258,7 @@ func BulkMulticastDeployment(genAppKey string, devEuiList [][]byte, groupId int6
 	mcRootKey, err := multicastsetup.GetMcRootKeyForGenAppKey(aesKeyByteArray)
 	if err != nil {
 		log.Fatal(err)
-		return 0, "", nil
+		return 0, "", "", nil
 	}
 
 	var devicesToDeploy []*fuota.DeploymentDevice
@@ -267,6 +295,7 @@ func BulkMulticastDeployment(genAppKey string, devEuiList [][]byte, groupId int6
 			UnicastTimeout:           ptypes.DurationProto(time.Duration(unicastTimeout) * time.Second),
 			UnicastAttemptCount:      uint32(unicastAttemptCount),
 			ExistingMulticastGroupId: existingMCgroupID,
+			ExistingDeploymentId:     existingDeploymentID,
 		},
 	})
 	if err != nil {
@@ -276,9 +305,9 @@ func BulkMulticastDeployment(genAppKey string, devEuiList [][]byte, groupId int6
 	var id uuid.UUID
 	copy(id[:], resp.GetId())
 
-	fmt.Printf("deployment created: %s\n", id)
+	fmt.Printf("Multicast Deployment operation. DeploymentId : %s\n", id)
 
-	return len(devEuiList), resp.MulticastGroupId, nil
+	return len(devEuiList), resp.MulticastGroupId, id.String(), nil
 }
 
 // GetID returns the random assigned FUOTA deployment ID.
@@ -501,7 +530,23 @@ func (d *MulticastDeployment) stepAddDevicesToMulticastGroup(ctx context.Context
 				fmt.Errorf("add device to multicast-group error: %w", err)
 			}
 		} else if resp == nil {
+			fmt.Errorf("add device to multicast-group response nil")
 			return nil
+		} else {
+			if err := storage.Transaction(func(tx sqlx.Ext) error {
+				d.deviceState[devEUI] = &deviceState{}
+
+				sdd := storage.DeploymentDevice{
+					DeploymentID: d.id,
+					DevEUI:       devEUI,
+				}
+				if err := storage.CreateDeploymentDevice(context.Background(), tx, &sdd); err != nil {
+					return fmt.Errorf("create deployment device error: %w", err)
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
 		}
 		//if err != nil {
 		//	return fmt.Errorf("add device to multicast-group error: %w", err)
@@ -520,14 +565,30 @@ devLoop:
 	for {
 		attempt += 1
 		if attempt > d.opts.UnicastAttemptCount {
-			log.WithField("deployment_id", d.GetID()).Warning("fuota: multicast-setup reached max. number of attepts, some devices did not complete")
+			log.WithField("deployment_id", d.GetID()).Warning("fuota: multicast-setup reached max. number of attempts, some devices did not complete")
 			break
 		}
 
 		for devEUI := range d.opts.Devices {
-			if slices.Contains(d.devicesAlreadyInTheMCGroup, devEUI) {
-				continue
+			//if slices.Contains(d.devicesAlreadyInTheMCGroup, devEUI) {
+			//	continue
+			//}
+
+			//get deployment device from db and check setupComplete command. If setup completed, continue.
+			ddFromDb, err := storage.GetDeploymentDevice(ctx, storage.DB(), d.GetID(), devEUI)
+			if err != nil {
+				// if there is no dd object, it has not added to the mc group. So throw error.
+				return fmt.Errorf("get deployment device error, device dont have an DD record and did not found in mc group. Error: %w", err)
 			}
+
+			if d.deviceState[devEUI] == nil {
+				d.deviceState[devEUI] = &deviceState{} // init device state object
+			}
+
+			if ddFromDb.MCGroupSetupCompletedAt != nil {
+				d.deviceState[devEUI].setMulticastSetup(true)
+			}
+
 			if d.deviceState[devEUI].getMulticastSetup() {
 				continue
 			}
