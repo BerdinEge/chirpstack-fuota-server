@@ -182,6 +182,7 @@ func (a *FUOTAServerAPI) BulkMulticastDeployment(ctx context.Context, req *fapi.
 		return nil, errors.New("empty device list")
 	}
 
+	var multicastGroupID = deployment.GetMulticastGroupId()
 	var existingMCgroupID = deployment.GetExistingMulticastGroupId()
 	var existingDeploymentID = deployment.GetExistingDeploymentId()
 
@@ -196,7 +197,7 @@ func (a *FUOTAServerAPI) BulkMulticastDeployment(ctx context.Context, req *fapi.
 	}
 	log.Debug(devEuiList)
 	//, unicastTimeout int, unicastAttemptCount int, applicationId int, multicastFrequency int, multicastDR int
-	var nbOfDevices, createdMulticastGroupId, deploymentId, err = multicast.BulkMulticastDeployment(genAppKey, devEuiList, appId, int(deployment.GetUnicastTimeout()), int(deployment.GetUnicastAttemptCount()), int(deployment.GetApplicationId()), int(deployment.GetMulticastFrequency()), int(deployment.GetMulticastDr()), existingMCgroupID, existingDeploymentID)
+	var nbOfDevices, createdMulticastGroupId, deploymentId, err = multicast.BulkMulticastDeployment(genAppKey, devEuiList, int64(multicastGroupID), int(deployment.GetUnicastTimeout()), int(deployment.GetUnicastAttemptCount()), int(appId), int(deployment.GetMulticastFrequency()), int(deployment.GetMulticastDr()), existingMCgroupID, existingDeploymentID)
 	if err != nil {
 		return nil, err
 	}

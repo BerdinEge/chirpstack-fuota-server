@@ -20,6 +20,8 @@ type Deployment struct {
 	FragSessionSetupCompletedAt *time.Time `db:"frag_session_setup_completed_at"`
 	EnqueueCompletedAt          *time.Time `db:"enqueue_completed_at"`
 	FragStatusCompletedAt       *time.Time `db:"frag_status_completed_at"`
+	McAddr                      []byte     `db:"mcaddr"`
+	McKey                       []byte     `db:"mckey"`
 }
 
 // CreateDeployment creates the given Deployment.
@@ -90,7 +92,9 @@ func UpdateDeployment(ctx context.Context, db sqlx.Execer, d *Deployment) error 
 			mc_session_completed_at = $4,
 			frag_session_setup_completed_at = $5,
 			enqueue_completed_at = $6,
-			frag_status_completed_at = $7
+			frag_status_completed_at = $7,
+			mcaddr = $8,
+			mckey = $9
 		where
 			id = $1`,
 		d.ID,
@@ -100,6 +104,8 @@ func UpdateDeployment(ctx context.Context, db sqlx.Execer, d *Deployment) error 
 		d.FragSessionSetupCompletedAt,
 		d.EnqueueCompletedAt,
 		d.FragStatusCompletedAt,
+		d.McAddr,
+		d.McKey,
 	)
 	if err != nil {
 		return fmt.Errorf("sql update error: %w", err)

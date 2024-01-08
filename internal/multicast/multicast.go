@@ -496,6 +496,18 @@ func (d *MulticastDeployment) stepCreateMulticastGroup(ctx context.Context) erro
 		return fmt.Errorf("create multicast-group error: %w", err)
 	}
 
+	sd, err := storage.GetDeployment(ctx, storage.DB(), d.GetID())
+	if err != nil {
+		return fmt.Errorf("get deployment error: %w", err)
+	}
+
+	sd.McAddr = d.mcAddr[:]
+	sd.McKey = d.mcKey[:]
+
+	if err := storage.UpdateDeployment(ctx, storage.DB(), &sd); err != nil {
+		return fmt.Errorf("update deployment error: %w", err)
+	}
+
 	d.multicastGroupID = resp.Id
 
 	log.WithFields(log.Fields{
@@ -568,6 +580,20 @@ devLoop:
 			log.WithField("deployment_id", d.GetID()).Warning("fuota: multicast-setup reached max. number of attempts, some devices did not complete")
 			break
 		}
+
+		sd, err := storage.GetDeployment(ctx, storage.DB(), d.GetID())
+		if err != nil {
+			return fmt.Errorf("get deployment error: %w", err)
+		}
+
+		for i := 0; i < len(sd.McAddr); i++ {
+			d.mcAddr[i] = sd.McAddr[i]
+		}
+		//d.mcAddr = sd.McAddr
+		for i := 0; i < len(sd.McKey); i++ {
+			d.mcKey[i] = sd.McKey[i]
+		}
+		//d.mcKey = sd.McKey
 
 		for devEUI := range d.opts.Devices {
 			//if slices.Contains(d.devicesAlreadyInTheMCGroup, devEUI) {
