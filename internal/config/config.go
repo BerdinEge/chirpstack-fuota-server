@@ -35,10 +35,11 @@ type Config struct {
 
 	FUOTAServer struct {
 		API struct {
-			Bind    string `mapstructure:"bind"`
-			CACert  string `mapstructure:"ca_cert"`
-			TLSCert string `mapstructure:"tls_cert"`
-			TLSKey  string `mapstructure:"tls_key"`
+			Bind        string `mapstructure:"bind"`
+			CACert      string `mapstructure:"ca_cert"`
+			TLSCert     string `mapstructure:"tls_cert"`
+			TLSKey      string `mapstructure:"tls_key"`
+			CommanDelay int    `mapstructure:"command_delay"`
 		} `mapstructure:"api"`
 	} `mapstructure:"fuota_server"`
 }

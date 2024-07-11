@@ -26,6 +26,8 @@ import (
 	"github.com/brocaar/chirpstack-fuota-server/internal/storage"
 	"github.com/brocaar/lorawan"
 	"github.com/brocaar/lorawan/applayer/multicastsetup"
+
+	"github.com/brocaar/chirpstack-fuota-server/internal/config"
 )
 
 // Deployments defines the FUOTA deployment struct.
@@ -688,6 +690,11 @@ devLoop:
 			if err := storage.CreateDeploymentLog(ctx, storage.DB(), &dl); err != nil {
 				log.WithError(err).Error("fuota: create deployment log error")
 			}
+
+			// Sleep for n seconds before next iteration
+			var conf *config.Config
+			conf = &config.C
+			time.Sleep(time.Duration(conf.FUOTAServer.API.CommanDelay) * time.Second)
 		}
 
 		select {

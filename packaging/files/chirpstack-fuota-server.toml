@@ -117,3 +117,6 @@
     ca_cert=""
     tls_cert=""
     tls_key=""
+    
+    # Command delay configuration.
+    command_delay=10
