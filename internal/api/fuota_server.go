@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 
 	"github.com/gofrs/uuid"
 	"github.com/golang/protobuf/ptypes"
@@ -352,5 +353,40 @@ func (a *FUOTAServerAPI) GetDeploymentDeviceLogs(ctx context.Context, req *fapi.
 		resp.Logs = append(resp.Logs, &dl)
 	}
 
+	return &resp, nil
+}
+
+// Resets multicast setup of the device
+func (a *FUOTAServerAPI) ResetMulticastSetup(ctx context.Context, req *fapi.ResetMulticastSetupRequest) (*fapi.ResetMulticastSetupResponse, error) {
+	var resp fapi.ResetMulticastSetupResponse
+
+	byteArray, err := hex.DecodeString(req.DevEui)
+	if err != nil {
+		return nil, fmt.Errorf("hex.DecodeString DevEui error: %w", err)
+	}
+
+	if len(byteArray) != 8 {
+		return nil, fmt.Errorf("Hata: Hex string lenght is not valid")
+	}
+
+	eui64 := lorawan.EUI64{}
+	copy(eui64[:], byteArray)
+
+	parsedUUID, err := uuid.FromString(req.DeploymentId)
+	if err != nil {
+		return nil, fmt.Errorf("uuid.Parse DeploymentId error: %w", err)
+	}
+
+	dd, err := storage.GetDeploymentDevice(ctx, storage.DB(), parsedUUID, eui64)
+	if err != nil {
+		return nil, fmt.Errorf("get deployment device error: %w", err)
+	}
+
+	dd.MCGroupSetupCompletedAt = nil
+	if err := storage.UpdateDeploymentDevice(ctx, storage.DB(), &dd); err != nil {
+		return nil, fmt.Errorf("update deployment device error: %w", err)
+	}
+
+	resp.IsSucceed = true
 	return &resp, nil
 }

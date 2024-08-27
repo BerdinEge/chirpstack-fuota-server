@@ -820,6 +820,20 @@ devLoop:
 		}
 
 		for devEUI := range d.opts.Devices {
+
+			dd, err := storage.GetDeploymentDevice(ctx, storage.DB(), d.GetID(), devEUI)
+			if err != nil {
+				return fmt.Errorf("get deployment device error: %w", err)
+			}
+
+			// update the device state if the device state in db has changed
+			if dd.MCGroupSetupCompletedAt == nil {
+				if state, ok := d.deviceState[devEUI]; ok {
+					state.setMulticastSetup(false)
+					log.Debug("------DEVICE STATE HAS CHANGED------")
+				}
+			}
+
 			if d.deviceState[devEUI].getMulticastSetup() {
 				continue
 			}
